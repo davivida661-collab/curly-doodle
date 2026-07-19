@@ -1,0 +1,245 @@
+package dev.sora.protohax.ui.components
+
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
+import androidx.compose.material3.windowsizeclass.WindowHeightSizeClass
+import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Modifier
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.window.layout.DisplayFeature
+import androidx.window.layout.FoldingFeature
+import com.google.accompanist.navigation.animation.AnimatedNavHost
+import com.google.accompanist.navigation.animation.composable
+import com.google.accompanist.navigation.animation.rememberAnimatedNavController
+import dev.sora.protohax.ui.components.screen.AccountsScreen
+import dev.sora.protohax.ui.components.screen.ConfigScreen
+import dev.sora.protohax.ui.components.screen.DashboardScreen
+import dev.sora.protohax.ui.components.screen.settings.SettingsScreen
+import dev.sora.protohax.ui.navigation.*
+import dev.sora.protohax.util.*
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+
+@Composable
+fun PHaxApp(
+    windowSize: androidx.compose.material3.windowsizeclass.WindowSizeClass,
+    displayFeatures: List<DisplayFeature>
+) {
+    val navigationType: NavigationType
+
+    val foldingFeature = displayFeatures.filterIsInstance<FoldingFeature>().firstOrNull()
+
+    val foldingDevicePosture = when {
+        isBookPosture(foldingFeature) ->
+            DevicePosture.BookPosture(foldingFeature.bounds)
+
+        isSeparating(foldingFeature) ->
+            DevicePosture.Separating(foldingFeature.bounds, foldingFeature.orientation)
+
+        else -> DevicePosture.NormalPosture
+    }
+
+    when (windowSize.widthSizeClass) {
+        WindowWidthSizeClass.Compact -> {
+            navigationType = NavigationType.BOTTOM_NAVIGATION
+        }
+        WindowWidthSizeClass.Medium -> {
+            navigationType = NavigationType.NAVIGATION_RAIL
+        }
+        WindowWidthSizeClass.Expanded -> {
+            navigationType = if (foldingDevicePosture is DevicePosture.BookPosture) {
+                NavigationType.NAVIGATION_RAIL
+            } else {
+                NavigationType.PERMANENT_NAVIGATION_DRAWER
+            }
+        }
+        else -> {
+            navigationType = NavigationType.BOTTOM_NAVIGATION
+        }
+    }
+
+    val navigationContentPosition = when (windowSize.heightSizeClass) {
+        WindowHeightSizeClass.Compact -> {
+            NavigationContentPosition.TOP
+        }
+        WindowHeightSizeClass.Medium,
+        WindowHeightSizeClass.Expanded -> {
+            NavigationContentPosition.CENTER
+        }
+        else -> {
+            NavigationContentPosition.TOP
+        }
+    }
+
+    PHaxNavigationWrapper(
+        navigationType = navigationType,
+        navigationContentPosition = navigationContentPosition
+    )
+}
+
+@OptIn(ExperimentalAnimationApi::class, ExperimentalCoroutinesApi::class)
+@Composable
+private fun PHaxNavigationWrapper(
+    navigationType: NavigationType,
+    navigationContentPosition: NavigationContentPosition
+) {
+    val drawerState = androidx.compose.material3.rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    val navController = rememberAnimatedNavController()
+    val navigationActions = remember(navController) {
+        PHaxNavigationActions(navController)
+    }
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val selectedDestination =
+        navBackStackEntry?.destination?.route ?: PHaxRoute.DASHBOARD
+    val connectionState = connectionState()
+
+    if (navigationType == NavigationType.PERMANENT_NAVIGATION_DRAWER) {
+        androidx.compose.material3.PermanentNavigationDrawer(drawerContent = {
+            PermanentNavigationDrawerContent(
+                selectedDestination = selectedDestination,
+                navigationContentPosition = navigationContentPosition,
+                navigateToTopLevelDestination = navigationActions::navigateTo
+            )
+        }) {
+            PHaxAppContent(
+                navigationType = navigationType,
+                navigationContentPosition = navigationContentPosition,
+                navController = navController,
+                selectedDestination = selectedDestination,
+                navigateToTopLevelDestination = navigationActions::navigateTo,
+                connectionState = connectionState
+            )
+        }
+    } else if (navigationType != NavigationType.BOTTOM_NAVIGATION) {
+        androidx.compose.material3.ModalNavigationDrawer(
+            drawerContent = {
+                ModalNavigationDrawerContent(
+                    selectedDestination = selectedDestination,
+                    navigationContentPosition = navigationContentPosition,
+                    navigateToTopLevelDestination = navigationActions::navigateTo,
+                    onDrawerClicked = {
+                        scope.launch {
+                            drawerState.close()
+                        }
+                    }
+                )
+            },
+            drawerState = drawerState
+        ) {
+            PHaxAppContent(
+                navigationType = navigationType,
+                navigationContentPosition = navigationContentPosition,
+                navController = navController,
+                selectedDestination = selectedDestination,
+                navigateToTopLevelDestination = navigationActions::navigateTo,
+                connectionState = connectionState
+            ) {
+                scope.launch {
+                    drawerState.open()
+                }
+            }
+        }
+    } else {
+        PHaxAppContent(
+            navigationType = navigationType,
+            navigationContentPosition = navigationContentPosition,
+            navController = navController,
+            selectedDestination = selectedDestination,
+            navigateToTopLevelDestination = navigationActions::navigateTo,
+            connectionState = connectionState
+        ) {
+            scope.launch {
+                drawerState.open()
+            }
+        }
+    }
+}
+
+@Composable
+fun PHaxAppContent(
+    modifier: Modifier = Modifier,
+    navigationType: NavigationType,
+    navigationContentPosition: NavigationContentPosition,
+    navController: NavHostController,
+    selectedDestination: String,
+    navigateToTopLevelDestination: (PHaxTopLevelDestination) -> Unit,
+    connectionState: State<Boolean>,
+    onDrawerClicked: () -> Unit = {}
+) {
+    Row(modifier = modifier.fillMaxSize()) {
+        androidx.compose.animation.AnimatedVisibility(visible = navigationType == NavigationType.NAVIGATION_RAIL) {
+            PHaxNavigationRail(
+                selectedDestination = selectedDestination,
+                navigationContentPosition = navigationContentPosition,
+                navigateToTopLevelDestination = navigateToTopLevelDestination,
+                onDrawerClicked = onDrawerClicked
+            )
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.inverseOnSurface)
+        ) {
+            PHaxNavHost(
+                navController = navController,
+                navigationType = navigationType,
+                modifier = Modifier
+                    .weight(1f)
+                    .background(MaterialTheme.colorScheme.background),
+                connectionState = connectionState,
+                navigateToTopLevelDestination = navigateToTopLevelDestination
+            )
+            androidx.compose.animation.AnimatedVisibility(visible = navigationType == NavigationType.BOTTOM_NAVIGATION) {
+                PHaxBottomNavigationBar(
+                    selectedDestination = selectedDestination,
+                    navigateToTopLevelDestination = navigateToTopLevelDestination
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalAnimationApi::class)
+@Composable
+private fun PHaxNavHost(
+    navController: NavHostController,
+    navigationType: NavigationType,
+    modifier: Modifier = Modifier,
+    connectionState: State<Boolean>,
+    navigateToTopLevelDestination: (PHaxTopLevelDestination) -> Unit
+) {
+    AnimatedNavHost(
+        modifier = modifier,
+        navController = navController,
+        startDestination = PHaxRoute.DASHBOARD
+    ) {
+        composable(PHaxRoute.DASHBOARD) {
+            DashboardScreen(navigationType, connectionState, navigateToTopLevelDestination)
+        }
+        composable(PHaxRoute.CONFIG) {
+            ConfigScreen(navigationType)
+        }
+        composable(PHaxRoute.ACCOUNTS) {
+            AccountsScreen(navigationType)
+        }
+        composable(PHaxRoute.SETTINGS) {
+            SettingsScreen(navigationType)
+        }
+    }
+}
